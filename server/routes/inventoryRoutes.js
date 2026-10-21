@@ -2,8 +2,16 @@ const express = require('express');
 const router = express.Router();
 const { getInventory, getInventoryById, createInventory, updateInventory, deleteInventory } = require('../controllers/inventoryController');
 const { protect } = require('../middleware/authMiddleware');
+const { authorize } = require('../middleware/roleMiddleware');
 
-router.route('/').get(protect, getInventory).post(protect, createInventory);
-router.route('/:id').get(protect, getInventoryById).put(protect, updateInventory).delete(protect, deleteInventory);
+// B9: All authenticated users can read inventory.
+router.route('/')
+  .get(protect, getInventory)
+  .post(protect, authorize('admin', 'siteManager'), createInventory);
+
+router.route('/:id')
+  .get(protect, getInventoryById)
+  .put(protect, authorize('admin', 'siteManager'), updateInventory)
+  .delete(protect, authorize('admin'), deleteInventory);
 
 module.exports = router;
