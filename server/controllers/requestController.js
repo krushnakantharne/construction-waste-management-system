@@ -88,15 +88,42 @@ const createRequest = async (req, res) => {
 // Historical requests that were already Approved before this fix will have had
 // their quantity deducted already. We do NOT retroactively restore those records.
 // This fix only applies to NEW status transitions going forward.
+// ── Module-level replica-set detection cache ─────────────────────────────────
+// Populated lazily on first updateRequestStatus call. Avoids repeated DB admin
+// commands. undefined = not yet probed, true/false = result cached.
+let _isReplicaSet;
+async function detectReplicaSet() {
+  if (_isReplicaSet !== undefined) return _isReplicaSet;
+  try {
+    const hello = await mongoose.connection.db.admin().command({ hello: 1 });
+    _isReplicaSet = !!hello.setName;
+  } catch {
+    _isReplicaSet = false;
+  }
+  return _isReplicaSet;
+}
+
 const updateRequestStatus = async (req, res) => {
   // Use a session for multi-document atomicity where replica sets are available.
-  // Falls back gracefully on standalone MongoDB (session is unused but harmless).
-  const session = await mongoose.startSession().catch(() => null);
-  const useTransaction = session !== null;
+  // Standalone MongoDB does not support transactions; we detect this once and
+  // fall back gracefully. B14 atomicity is still guaranteed on standalone via
+  // the conditional findOneAndUpdate filter (no TOCTOU window).
+  const replicaSet = await detectReplicaSet();
+  let session = null;
+  let useTransaction = false;
+  if (replicaSet) {
+    try {
+      session = await mongoose.startSession();
+      session.startTransaction();
+      useTransaction = true;
+    } catch {
+      if (session) { session.endSession().catch(() => {}); }
+      session = null;
+      useTransaction = false;
+    }
+  }
 
   try {
-    if (useTransaction) session.startTransaction();
-
     const sessionOpt = useTransaction ? { session } : {};
 
     const request = await Request.findById(req.params.id).session(session);
@@ -157,7 +184,7 @@ const updateRequestStatus = async (req, res) => {
           },
         },
         { $inc: { reservedQuantity: request.quantity } },
-        { new: true, ...sessionOpt }
+        { returnDocument: 'after', ...sessionOpt }
       );
 
       if (!updatedInventory) {
@@ -180,7 +207,7 @@ const updateRequestStatus = async (req, res) => {
             reservedQuantity: -request.quantity,
           },
         },
-        { new: true, ...sessionOpt }
+        { ...sessionOpt }
       );
 
       // Mark inventory as Used/Sold if quantity reaches zero
