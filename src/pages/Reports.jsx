@@ -4,17 +4,49 @@ import { fetchWasteReport, fetchFinancialReport, fetchProjectReport } from '../f
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import api from '../services/api';
 import { FileText, Download } from 'lucide-react';
 
 export function Reports() {
   const dispatch = useDispatch();
-  const { wasteReport, financialReport, projectReport, loading } = useSelector(state => state.reports);
+  const { wasteReport, projectReport, loading } = useSelector(state => state.reports);
+  const [financialData, setFinancialData] = React.useState([]);
+  const [filter, setFilter] = React.useState('thisWeek');
+  const [customStart, setCustomStart] = React.useState('');
+  const [customEnd, setCustomEnd] = React.useState('');
 
   useEffect(() => {
     dispatch(fetchWasteReport());
-    dispatch(fetchFinancialReport());
+    // fetch financial data with current filter
+    const fetchFinancial = async () => {
+      try {
+        const params = {};
+        const now = new Date();
+        let start, end;
+        if (filter === 'custom') {
+          if (customStart) params.start = customStart;
+          if (customEnd) params.end = customEnd;
+        } else if (filter === 'thisWeek') {
+          const first = now.getDate() - now.getDay();
+          start = new Date(now.setDate(first)).toISOString();
+          end = new Date().toISOString();
+          params.start = start; params.end = end;
+        } else if (filter === 'thisMonth') {
+          start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+          end = new Date().toISOString();
+          params.start = start; params.end = end;
+        } else if (filter === 'thisYear') {
+          start = new Date(now.getFullYear(), 0, 1).toISOString();
+          end = new Date().toISOString();
+          params.start = start; params.end = end;
+        }
+        const response = await api.get('/reports/financial', { params });
+        setFinancialData(response.data);
+      } catch (e) { console.error(e); }
+    };
+    fetchFinancial();
     dispatch(fetchProjectReport());
-  }, [dispatch]);
+  }, [dispatch, filter, customStart, customEnd]);
 
   let totalTons = 0, reusedTons = 0, recycledTons = 0, disposedTons = 0;
   if (wasteReport && wasteReport.length > 0) {
@@ -28,8 +60,8 @@ export function Reports() {
   const recoveryRate = totalTons > 0 ? (((reusedTons + recycledTons) / totalTons) * 100).toFixed(1) : 0;
 
   let totalCost = 0, totalRevenue = 0;
-  if (financialReport && financialReport.length > 0) {
-    financialReport.forEach(t => {
+  if (financialData && financialData.length > 0) {
+    financialData.forEach(t => {
       if (t.type === 'Expense') totalCost += t.amount;
       if (t.type === 'Income' || t.type === 'Revenue') totalRevenue += t.amount;
     });
