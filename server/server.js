@@ -41,7 +41,7 @@ app.use('/api/transactions', require('./routes/transactionRoutes'));
 app.use('/api/feedback', require('./routes/feedbackRoutes'));
 app.use('/api/dashboard', require('./routes/dashboardRoutes'));
 app.use('/api/reports', require('./routes/reportRoutes'));
-
+app.use('/api/invoices', require('./routes/invoiceRoutes'));
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;

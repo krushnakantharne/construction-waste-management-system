@@ -4,6 +4,7 @@ const Inventory = require('../models/Inventory');
 const StockMovement = require('../models/StockMovement');
 require('../models/Project');
 require('../models/User');
+const Invoice = require('../models/Invoice');
 
 /** Record a stock movement; never throws — logs on failure. */
 async function recordMovement(data) {
@@ -302,6 +303,28 @@ const updateRequestStatus = async (req, res) => {
     }
 
     const updatedRequest = await request.save(sessionOpt);
+
+    // Invoice generation on approval
+    if (status === 'Approved') {
+      const existingInvoice = await Invoice.findOne({ request: request._id });
+      if (!existingInvoice) {
+        const inv = await Inventory.findById(request.inventory).select('estimatedValue');
+        const unitPrice = inv?.estimatedValue || 0;
+        const amount = request.quantity * unitPrice;
+        if (amount <= 0) {
+          if (useTransaction) await session.abortTransaction();
+          return res.status(400).json({ message: 'Invalid invoice amount calculated.' });
+        }
+        const invoiceNumber = `INV-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+        await Invoice.create({
+          invoiceNumber,
+          request: request._id,
+          customer: request.customer,
+          amount,
+          issueDate: new Date(),
+        });
+      }
+    }
 
     if (useTransaction) await session.commitTransaction();
 
