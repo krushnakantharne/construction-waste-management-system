@@ -142,7 +142,7 @@ const updateRequestStatus = async (req, res) => {
       session.startTransaction();
       useTransaction = true;
     } catch {
-      if (session) { session.endSession().catch(() => {}); }
+      if (session) { session.endSession().catch(() => { }); }
       session = null;
       useTransaction = false;
     }
@@ -151,7 +151,10 @@ const updateRequestStatus = async (req, res) => {
   try {
     const sessionOpt = useTransaction ? { session } : {};
 
-    const request = await Request.findById(req.params.id).session(session);
+    // Apply session only if a transaction is active
+    let requestQuery = Request.findById(req.params.id);
+    if (session) requestQuery = requestQuery.session(session);
+    const request = await requestQuery;
     if (!request) {
       if (useTransaction) await session.abortTransaction();
       return res.status(404).json({ message: 'Request not found' });
@@ -173,12 +176,12 @@ const updateRequestStatus = async (req, res) => {
 
     // Prevent backward / invalid transitions
     const VALID_TRANSITIONS = {
-      Pending:    ['Approved', 'Rejected'],
-      Approved:   ['Processing', 'Rejected'],
+      Pending: ['Approved', 'Rejected'],
+      Approved: ['Processing', 'Rejected'],
       Processing: ['Completed', 'Rejected'],
-      Completed:  [],       // terminal
-      Rejected:   [],       // terminal
-      Cancelled:  [],       // terminal
+      Completed: [],       // terminal
+      Rejected: [],       // terminal
+      Cancelled: [],       // terminal
     };
 
     const allowed = VALID_TRANSITIONS[request.status] || [];
@@ -225,16 +228,17 @@ const updateRequestStatus = async (req, res) => {
 
       request.inventory = updatedInventory._id;
 
+
       // Record reservation movement
       await recordMovement({
-        inventory:    updatedInventory._id,
+        inventory: updatedInventory._id,
         movementType: 'reservation',
         quantityDelta: -request.quantity,
         quantityAfter: updatedInventory.quantity,
         reservedAfter: updatedInventory.reservedQuantity,
-        reference:    String(request._id),
-        notes:        `Reserved for request by customer`,
-        performedBy:  req.user._id,
+        reference: String(request._id),
+        notes: `Reserved for request by customer`,
+        performedBy: req.user._id,
       });
     }
 
@@ -252,7 +256,8 @@ const updateRequestStatus = async (req, res) => {
       );
 
       // Mark inventory as Used/Sold if quantity reaches zero
-      const inv = await Inventory.findById(request.inventory).session(session);
+      let inv = await Inventory.findById(request.inventory);
+      if (session) inv = inv.session(session);
       if (inv && inv.quantity <= 0) {
         inv.quantity = 0;
         inv.status = 'Sold';
@@ -261,14 +266,14 @@ const updateRequestStatus = async (req, res) => {
 
       // Record consumption movement
       await recordMovement({
-        inventory:    request.inventory,
+        inventory: request.inventory,
         movementType: 'consumption',
         quantityDelta: -request.quantity,
         quantityAfter: inv ? inv.quantity : null,
         reservedAfter: inv ? inv.reservedQuantity : null,
-        reference:    String(request._id),
-        notes:        `Consumed on request completion`,
-        performedBy:  req.user._id,
+        reference: String(request._id),
+        notes: `Consumed on request completion`,
+        performedBy: req.user._id,
       });
     }
 
@@ -276,8 +281,8 @@ const updateRequestStatus = async (req, res) => {
     // Only release if the request was already in Approved/Processing state
     // (meaning a reservation was actually placed by this system).
     if ((status === 'Rejected' || status === 'Cancelled') &&
-        (request.status === 'Approved' || request.status === 'Processing') &&
-        request.inventory) {
+      (request.status === 'Approved' || request.status === 'Processing') &&
+      request.inventory) {
       const relInv = await Inventory.findByIdAndUpdate(
         request.inventory,
         { $inc: { reservedQuantity: -request.quantity } },
@@ -286,14 +291,14 @@ const updateRequestStatus = async (req, res) => {
 
       // Record release movement
       await recordMovement({
-        inventory:    request.inventory,
+        inventory: request.inventory,
         movementType: 'release',
         quantityDelta: request.quantity,
         quantityAfter: relInv ? relInv.quantity : null,
         reservedAfter: relInv ? relInv.reservedQuantity : null,
-        reference:    String(request._id),
-        notes:        `Released: request ${status.toLowerCase()}`,
-        performedBy:  req.user._id,
+        reference: String(request._id),
+        notes: `Released: request ${status.toLowerCase()}`,
+        performedBy: req.user._id,
       });
     }
 
@@ -311,20 +316,22 @@ const updateRequestStatus = async (req, res) => {
         const inv = await Inventory.findById(request.inventory).select('estimatedValue quantity');
         const unitPrice = inv?.quantity ? inv.estimatedValue / inv.quantity : 0;
         const amount = request.quantity * unitPrice;
-        if (amount <= 0) {
-          if (useTransaction) await session.abortTransaction();
-          return res.status(400).json({ message: 'Invalid invoice amount calculated.' });
+        // Skip invoice creation if amount is not a positive number (e.g., estimatedValue missing)
+        if (isNaN(amount) || amount <= 0) {
+          // no invoice generated; continue without error
+        } else {
+          const invoiceNumber = `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+          await Invoice.create({
+            invoiceNumber,
+            request: request._id,
+            customer: request.customer,
+            amount,
+            issueDate: new Date(),
+          });
         }
-        const invoiceNumber = `INV-${Date.now()}-${Math.floor(Math.random()*1000)}`;
-        await Invoice.create({
-          invoiceNumber,
-          request: request._id,
-          customer: request.customer,
-          amount,
-          issueDate: new Date(),
-        });
       }
     }
+    // duplicate invoice block removed
 
     if (useTransaction) await session.commitTransaction();
 
