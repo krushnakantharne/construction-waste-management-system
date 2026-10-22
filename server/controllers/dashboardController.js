@@ -30,11 +30,13 @@ const getDashboardSummary = async (req, res) => {
     const recoveryRate = totalWaste > 0 ? ((reused + recycled) / totalWaste) * 100 : 0;
 
     const transactions = await Transaction.find();
+
     let totalCost = 0;
     let revenue = 0;
     transactions.forEach(t => {
-      if (t.type === 'Expense') totalCost += t.amount;
-      if (t.type === 'Income') revenue += t.amount;
+      const amt = typeof t.amount === 'number' && !isNaN(t.amount) ? t.amount : 0;
+      if (t.type === 'Expense') totalCost += amt;
+      if (t.type === 'Income') revenue += amt;
     });
     const netCost = totalCost - revenue;
 
