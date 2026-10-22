@@ -1,8 +1,18 @@
 const mongoose = require('mongoose');
 const Request = require('../models/Request');
 const Inventory = require('../models/Inventory');
+const StockMovement = require('../models/StockMovement');
 require('../models/Project');
 require('../models/User');
+
+/** Record a stock movement; never throws — logs on failure. */
+async function recordMovement(data) {
+  try {
+    await StockMovement.create(data);
+  } catch (err) {
+    console.error('[StockMovement] Failed to record:', err.message);
+  }
+}
 
 // ── Role helpers ───────────────────────────────────────────────────────────────
 const STAFF_ROLES = ['admin', 'siteManager', 'recycler'];
@@ -54,6 +64,17 @@ const getRequestById = async (req, res) => {
 // ── POST /api/requests ────────────────────────────────────────────────────────
 const createRequest = async (req, res) => {
   try {
+    // Disallow client-supplied status – must start as Pending
+    if ('status' in req.body) {
+      return res.status(400).json({ message: 'Status cannot be set on creation.' });
+    }
+    // Validate required fields
+    const { material, quantity } = req.body;
+    if (!material) return res.status(400).json({ message: 'Material is required.' });
+    if (quantity == null || isNaN(quantity) || Number(quantity) <= 0) {
+      return res.status(400).json({ message: 'Quantity must be a positive number.' });
+    }
+
     const bodyData = { ...req.body, customer: req.user?._id };
 
     if (bodyData.sourceProject && !mongoose.Types.ObjectId.isValid(bodyData.sourceProject)) {
@@ -66,8 +87,11 @@ const createRequest = async (req, res) => {
     const request = new Request(bodyData);
     const createdRequest = await request.save();
     res.status(201).json(createdRequest);
-  } catch (error) { res.status(500).json({ message: error.message }); }
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 };
+
 
 // ── PUT /api/requests/:id/status (staff only, enforced at route level) ────────
 //
@@ -133,6 +157,10 @@ const updateRequestStatus = async (req, res) => {
     }
 
     const { status, inventoryId } = req.body;
+    if (!status) {
+      if (useTransaction) await session.abortTransaction();
+      return res.status(400).json({ message: 'Status field is required.' });
+    }
 
     // ── B3: Idempotency guard ────────────────────────────────────────────────
     if (request.status === status) {
@@ -195,6 +223,18 @@ const updateRequestStatus = async (req, res) => {
       }
 
       request.inventory = updatedInventory._id;
+
+      // Record reservation movement
+      await recordMovement({
+        inventory:    updatedInventory._id,
+        movementType: 'reservation',
+        quantityDelta: -request.quantity,
+        quantityAfter: updatedInventory.quantity,
+        reservedAfter: updatedInventory.reservedQuantity,
+        reference:    String(request._id),
+        notes:        `Reserved for request by customer`,
+        performedBy:  req.user._id,
+      });
     }
 
     // ── Completed: fulfill reservation (deduct actual stock) ─────────────────
@@ -217,6 +257,18 @@ const updateRequestStatus = async (req, res) => {
         inv.status = 'Sold';
         await inv.save(sessionOpt);
       }
+
+      // Record consumption movement
+      await recordMovement({
+        inventory:    request.inventory,
+        movementType: 'consumption',
+        quantityDelta: -request.quantity,
+        quantityAfter: inv ? inv.quantity : null,
+        reservedAfter: inv ? inv.reservedQuantity : null,
+        reference:    String(request._id),
+        notes:        `Consumed on request completion`,
+        performedBy:  req.user._id,
+      });
     }
 
     // ── B4: Rejected / Cancelled: release reservation ────────────────────────
@@ -225,11 +277,23 @@ const updateRequestStatus = async (req, res) => {
     if ((status === 'Rejected' || status === 'Cancelled') &&
         (request.status === 'Approved' || request.status === 'Processing') &&
         request.inventory) {
-      await Inventory.findByIdAndUpdate(
+      const relInv = await Inventory.findByIdAndUpdate(
         request.inventory,
         { $inc: { reservedQuantity: -request.quantity } },
-        { ...sessionOpt }
+        { returnDocument: 'after', ...sessionOpt }
       );
+
+      // Record release movement
+      await recordMovement({
+        inventory:    request.inventory,
+        movementType: 'release',
+        quantityDelta: request.quantity,
+        quantityAfter: relInv ? relInv.quantity : null,
+        reservedAfter: relInv ? relInv.reservedQuantity : null,
+        reference:    String(request._id),
+        notes:        `Released: request ${status.toLowerCase()}`,
+        performedBy:  req.user._id,
+      });
     }
 
     request.status = status;

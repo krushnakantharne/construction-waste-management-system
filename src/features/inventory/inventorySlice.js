@@ -4,68 +4,93 @@ import api from '../../services/api';
 const initialState = {
   inventoryItems: [],
   selectedInventory: null,
+  movements: [],            // stock movement history for selected item
+  movementsLoading: false,
   loading: false,
-  error: null
+  error: null,
+  mutationError: null,
 };
 
 export const fetchInventory = createAsyncThunk('inventory/fetchInventory', async (_, thunkAPI) => {
   try {
     const response = await api.get('/inventory');
     return response.data;
-  } catch (error) { return thunkAPI.rejectWithValue(error.response.data.message || error.message); }
+  } catch (error) { return thunkAPI.rejectWithValue(error.response?.data?.message || error.message); }
 });
 
 export const fetchInventoryById = createAsyncThunk('inventory/fetchInventoryById', async (id, thunkAPI) => {
   try {
     const response = await api.get(`/inventory/${id}`);
     return response.data;
-  } catch (error) { return thunkAPI.rejectWithValue(error.response.data.message || error.message); }
+  } catch (error) { return thunkAPI.rejectWithValue(error.response?.data?.message || error.message); }
+});
+
+export const fetchMovements = createAsyncThunk('inventory/fetchMovements', async (id, thunkAPI) => {
+  try {
+    const response = await api.get(`/inventory/${id}/movements`);
+    return response.data;
+  } catch (error) { return thunkAPI.rejectWithValue(error.response?.data?.message || error.message); }
 });
 
 export const createInventory = createAsyncThunk('inventory/createInventory', async (inventoryData, thunkAPI) => {
   try {
     const response = await api.post('/inventory', inventoryData);
     return response.data;
-  } catch (error) { return thunkAPI.rejectWithValue(error.response.data.message || error.message); }
+  } catch (error) { return thunkAPI.rejectWithValue(error.response?.data?.message || error.message); }
 });
 
 export const updateInventory = createAsyncThunk('inventory/updateInventory', async ({ id, data }, thunkAPI) => {
   try {
     const response = await api.put(`/inventory/${id}`, data);
     return response.data;
-  } catch (error) { return thunkAPI.rejectWithValue(error.response.data.message || error.message); }
+  } catch (error) { return thunkAPI.rejectWithValue(error.response?.data?.message || error.message); }
 });
 
 export const deleteInventory = createAsyncThunk('inventory/deleteInventory', async (id, thunkAPI) => {
   try {
     await api.delete(`/inventory/${id}`);
     return id;
-  } catch (error) { return thunkAPI.rejectWithValue(error.response.data.message || error.message); }
+  } catch (error) { return thunkAPI.rejectWithValue(error.response?.data?.message || error.message); }
 });
 
 const inventorySlice = createSlice({
   name: 'inventory',
   initialState,
-  reducers: {},
+  reducers: {
+    clearMutationError: (state) => { state.mutationError = null; },
+    clearMovements: (state) => { state.movements = []; },
+  },
   extraReducers: (builder) => {
     builder
       .addCase(fetchInventory.pending, (state) => { state.loading = true; state.error = null; })
       .addCase(fetchInventory.fulfilled, (state, action) => { state.loading = false; state.inventoryItems = action.payload; })
       .addCase(fetchInventory.rejected, (state, action) => { state.loading = false; state.error = action.payload; })
-      
+
       .addCase(fetchInventoryById.pending, (state) => { state.loading = true; state.error = null; })
       .addCase(fetchInventoryById.fulfilled, (state, action) => { state.loading = false; state.selectedInventory = action.payload; })
       .addCase(fetchInventoryById.rejected, (state, action) => { state.loading = false; state.error = action.payload; })
-      
-      .addCase(createInventory.fulfilled, (state, action) => { state.inventoryItems.push(action.payload); })
+
+      .addCase(fetchMovements.pending, (state) => { state.movementsLoading = true; })
+      .addCase(fetchMovements.fulfilled, (state, action) => { state.movementsLoading = false; state.movements = action.payload; })
+      .addCase(fetchMovements.rejected, (state) => { state.movementsLoading = false; })
+
+      .addCase(createInventory.pending, (state) => { state.mutationError = null; })
+      .addCase(createInventory.fulfilled, (state, action) => { state.inventoryItems.unshift(action.payload); })
+      .addCase(createInventory.rejected, (state, action) => { state.mutationError = action.payload; })
+
+      .addCase(updateInventory.pending, (state) => { state.mutationError = null; })
       .addCase(updateInventory.fulfilled, (state, action) => {
         const index = state.inventoryItems.findIndex(i => i._id === action.payload._id);
         if (index !== -1) state.inventoryItems[index] = action.payload;
       })
+      .addCase(updateInventory.rejected, (state, action) => { state.mutationError = action.payload; })
+
       .addCase(deleteInventory.fulfilled, (state, action) => {
         state.inventoryItems = state.inventoryItems.filter(i => i._id !== action.payload);
-      });
+      })
+      .addCase(deleteInventory.rejected, (state, action) => { state.mutationError = action.payload; });
   }
 });
 
+export const { clearMutationError, clearMovements } = inventorySlice.actions;
 export default inventorySlice.reducer;
