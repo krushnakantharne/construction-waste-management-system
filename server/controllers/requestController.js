@@ -308,8 +308,8 @@ const updateRequestStatus = async (req, res) => {
     if (status === 'Approved') {
       const existingInvoice = await Invoice.findOne({ request: request._id });
       if (!existingInvoice) {
-        const inv = await Inventory.findById(request.inventory).select('estimatedValue');
-        const unitPrice = inv?.estimatedValue || 0;
+        const inv = await Inventory.findById(request.inventory).select('estimatedValue quantity');
+        const unitPrice = inv?.quantity ? inv.estimatedValue / inv.quantity : 0;
         const amount = request.quantity * unitPrice;
         if (amount <= 0) {
           if (useTransaction) await session.abortTransaction();
