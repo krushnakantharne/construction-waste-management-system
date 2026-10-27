@@ -82,6 +82,9 @@ const createInventory = async (req, res) => {
       reservedQuantity: rq,
       createdBy: req.user._id,
     };
+    // Clean empty strings for ObjectId refs
+    if (inventoryData.project === '') delete inventoryData.project;
+    if (inventoryData.sourceWaste === '') delete inventoryData.sourceWaste;
 
     const inventory = new Inventory(inventoryData);
     const created = await inventory.save();

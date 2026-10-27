@@ -31,7 +31,7 @@ const STATUS_OPTIONS = ['Available', 'Reserved', 'Sold', 'Used'];
 
 const EMPTY_FORM = {
   materialName: '', materialType: 'Metal', quantity: '', unit: 'kg',
-  estimatedValue: '', condition: '', status: 'Available', project: '', notes: '',
+  estimatedValue: '', condition: '', status: 'Available', notes: '',
 };
 
 // ── Movement type display helpers ─────────────────────────────────────────────
@@ -70,7 +70,10 @@ function InventoryForm({ initial = EMPTY_FORM, onSave, onCancel, loading, error,
     if (!qty || qty <= 0) { setValidationErr('Quantity must be a positive number.'); return; }
     const val = form.estimatedValue !== '' ? Number(form.estimatedValue) : undefined;
     if (val !== undefined && val < 0) { setValidationErr('Estimated value must be ≥ 0.'); return; }
-    onSave({ ...form, quantity: qty, estimatedValue: val });
+    // Clean empty string fields before saving
+    const cleaned = { ...form, quantity: qty, estimatedValue: val };
+    Object.keys(cleaned).forEach(k => { if (cleaned[k] === '') delete cleaned[k]; });
+    onSave(cleaned);
   };
 
   const inputCls = 'w-full px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-primary-500 bg-white';
